@@ -257,14 +257,14 @@ if st.button("Evaluate Resumes") and vectorstore is not None and job_description
     found_any = False  # Track if any candidates matched
     candidates = [line.strip() for line in response.split("\n") if line.strip()]
 
-    for candidate in candidates:
+    for idx, candidate in enumerate(candidates):
         number, case_correct_name, description = extract_name(candidate)
         lower_name = case_correct_name.lower()
 
         if number != "":
             found_any = True
             with stylable_container(
-                key="container_with_border",
+                key=f"container_with_border_{idx}",  # unique key
                 css_styles="""
                     {
                         border: 0px solid #ccccd4;
@@ -274,7 +274,7 @@ if st.button("Evaluate Resumes") and vectorstore is not None and job_description
                     }
                 """,
             ):
-                st.markdown("##### " + number + ". " + case_correct_name)
+                st.markdown(f"##### {number}. {case_correct_name}")
                 st.markdown(description)
 
                 if lower_name in resume_name_map:
