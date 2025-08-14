@@ -1,6 +1,4 @@
-############################################
 # Resume Evaluation Assistant - Streamlit App
-############################################
 
 # ---------- Imports ----------
 import os
@@ -27,10 +25,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import LLMChainExtractor
 
-############################################
 # ---------- Constants & Config ----------
-############################################
-
 SAMPLE_JOB_DESCRIPTION = """NVIDIA is looking for a senior technical program manager to lead new product introduction for hardware for NVIDIA Infrastructure Specialists (NVIS) team. We want you to collaborate with cross-functional teams, including professional services, solutions architects, development engineers, hardware and software engineering, data center operations, project managers, product managers, and go-to-market strategy teams. We want your primary focus is to ensure NVIS' readiness as NVIDIA introduces new hardware including deployment, provisioning and validation for early customers. You will be working with and have the support of the global NVIS team and in turn supporting the team as delivery transitions to production deployment.
                             What will you be doing:
                                 •	Leading end-to-end execution of service programs related to new hardware product introduction and other related programs, ensuring adherence to project timelines, budgets, and quality standards. This includes applying your expertise to drive technical strategy, planning, and execution with the team, partners and customers.
@@ -53,10 +48,7 @@ VECTOR_STORE_PATH = "vectorstore.pkl"
 RESUME_MAP_PATH = "resumemap.pkl"
 VALID_CAND_PATH = "validcand.pkl"
 
-############################################
 # ---------- Page Setup ----------
-############################################
-
 api_key = st.secrets["GOOGLE_API_KEY"]
 
 st.set_page_config(
@@ -82,22 +74,27 @@ Upload resumes, enter a job description, and get AI-based recommendations for to
 ''')
 st.warning("This is a proof of concept and should only be used to supplement traditional evaluation methods.", icon="⚠️")
 
-############################################
 # ---------- Helper Functions ----------
-############################################
-
 def extract_name(raw_output):
     """Extract candidate number, name, and description from model output."""
+    # Case 1: Numbered list format (e.g., "1. John Doe: Description")
     if raw_output and raw_output[0].isdigit():
-        number = str(re.match(r'^\d+', raw_output).group())
-        candidate = raw_output.split(':')[0].replace('*', '').strip()
-        while candidate and not candidate[0].isalpha():
-            candidate = candidate[1:].lstrip()
-        candidate = candidate.rstrip('.')
-        description = raw_output.split(':', 1)[1] if ':' in raw_output else ''
-    else:
-        return "", "", ""
-    return number, candidate, description
+        number_match = re.match(r'^\d+', raw_output)
+        if number_match:
+            number = number_match.group()
+            candidate = raw_output.split(':', 1)[0].replace('*', '').strip()
+            while candidate and not candidate[0].isalpha():
+                candidate = candidate[1:].lstrip()
+            candidate = candidate.rstrip('.')
+            description = raw_output.split(':', 1)[1].strip() if ':' in raw_output else ''
+            return number, candidate, description
+    # Case 2: Header format (e.g., "**John Doe:** Description")
+    elif raw_output.startswith('**') and raw_output.endswith(':**'):
+        candidate = raw_output.strip('*:').strip()
+        description = ''  # Description will be in subsequent lines
+        return '', candidate, description
+    # Case 3: Description lines (to be appended to previous candidate)
+    return '', '', raw_output.strip()
 
 def save_uploaded_files(uploaded_files):
     """Save uploaded resumes to DOCS_DIR."""
@@ -107,10 +104,7 @@ def save_uploaded_files(uploaded_files):
             f.write(uploaded_file.read())
         st.info(f"File {uploaded_file.name} uploaded successfully!")
 
-############################################
 # ---------- Sidebar: File Upload ----------
-############################################
-
 with st.sidebar:
     st.subheader("Upload Applicant Information")
     with st.form("upload-form", clear_on_submit=True):
@@ -119,10 +113,7 @@ with st.sidebar:
     if submitted and uploaded_files:
         save_uploaded_files(uploaded_files)
 
-############################################
 # ---------- LLM & Embedding Setup ----------
-############################################
-
 try:
     asyncio.get_running_loop()
 except RuntimeError:
@@ -130,7 +121,7 @@ except RuntimeError:
 
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
-    temperature=0,
+    temperature=1,
     google_api_key=api_key
 )
 
@@ -143,14 +134,7 @@ query_embedder = GoogleGenerativeAIEmbeddings(
     google_api_key=api_key
 )
 
-############################################
 # ---------- Vector Store Setup ----------
-############################################
-
-############################################
-# ---------- Vector Store Setup ----------
-############################################
-
 FAISS_INDEX_PATH = "faiss_index"
 
 use_existing_vector_store = st.sidebar.radio(
@@ -225,22 +209,18 @@ elif raw_documents:
             pickle.dump(valid_candidates, f)
         st.sidebar.success("Vector store saved.")
 
-
-############################################
 # ---------- Resume Evaluation ----------
-############################################
-
 valid_candidates_list = ', '.join(valid_candidates)
 prompt_template = ChatPromptTemplate.from_messages([
-    ("system", "Based on the given job description..."),
-    ("user", "Job Description: {input}\n\nCandidates: {context}\nValid names: " + valid_candidates_list)
+    ("system", """You are an expert recruiter evaluating resumes for a job. Based on the job description and candidate resumes, provide a ranked list of the top candidates (up to 5) who best match the job requirements. For each candidate, output in the format: 'N. Candidate Name: Description of why they are suitable or not, including specific qualifications or gaps.' If no candidates are suitable, explicitly state why each candidate does not meet the requirements, using the same numbered format. Ensure the candidate names match exactly those provided in the valid names list."""),
+    ("user", "Job Description: {input}\n\nCandidates: {context}\nValid names: {valid_candidates_list}")
 ])
 
 job_description = st.text_area("Enter the job description:", value=SAMPLE_JOB_DESCRIPTION, height=350)
 compressor = LLMChainExtractor.from_llm(llm)
 
 if st.button("Evaluate Resumes") and vectorstore is not None and job_description:
-    with st.spinner("Fetching resumes..."):
+    with st.spinner("Evaluating resumes and generating results..."):
         retriever = ContextualCompressionRetriever(
             base_compressor=compressor, 
             base_retriever=vectorstore.as_retriever(search_kwargs={"k": 15})
@@ -250,21 +230,69 @@ if st.button("Evaluate Resumes") and vectorstore is not None and job_description
             f"[CANDIDATE START] Candidate Name: {doc.metadata.get('candidate_name', 'Unknown')}\n"
             f"{doc.page_content}[CANDIDATE END]\n\n" for doc in docs
         )
-    chain = prompt_template | llm | StrOutputParser()
-    response = chain.invoke({"input": job_description, "context": context})
-    st.markdown("### Top Applicants:")
+        chain = prompt_template | llm | StrOutputParser()
+        response = chain.invoke({"input": job_description, "context": context, "valid_candidates_list": valid_candidates_list})
+        st.markdown("### Top Applicants:")
 
-    found_any = False  # Track if any candidates matched
-    candidates = [line.strip() for line in response.split("\n") if line.strip()]
+        found_any = False  # Track if any candidates matched
+        candidates = [line.strip() for line in response.split("\n") if line.strip()]
+        current_candidate = None
+        current_number = ''
+        current_description = []
 
-    for idx, candidate in enumerate(candidates):
-        number, case_correct_name, description = extract_name(candidate)
-        lower_name = case_correct_name.lower()
+        for idx, line in enumerate(candidates):
+            number, candidate_name, description = extract_name(line)
+            
+            if candidate_name:  # New candidate found
+                if current_candidate:  # Save previous candidate's data
+                    found_any = True
+                    with stylable_container(
+                        key=f"container_with_border_{idx}",  # unique key
+                        css_styles="""
+                            {
+                                border: 0px solid #ccccd4;
+                                border-radius: 0.75rem;
+                                padding: calc(1em + 2px);
+                                background-color: #f0f2f6
+                            }
+                        """,
+                    ):
+                        st.markdown(f"##### {current_number}. {current_candidate}")
+                        st.markdown('\n'.join(current_description))
+                        if current_candidate.lower() in resume_name_map:
+                            file_name = resume_name_map[current_candidate.lower()]
+                            file_path = os.path.join(DOCS_DIR, file_name)
+                            with st.expander("View Resume"):
+                                if os.path.exists(file_path):
+                                    if file_name.lower().endswith(('.doc', '.docx')):
+                                        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf:
+                                            convert(file_path, tmp_pdf.name)
+                                            pdf_path = tmp_pdf.name
+                                        with open(pdf_path, "rb") as f:
+                                            base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+                                        st.markdown(f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="600" type="application/pdf"></iframe>', unsafe_allow_html=True)
+                                        os.unlink(pdf_path)
+                                    else:
+                                        with open(file_path, "rb") as f:
+                                            base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+                                        st.markdown(f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="600" type="application/pdf"></iframe>', unsafe_allow_html=True)
+                                else:
+                                    st.warning("File not found.")
+                        else:
+                            st.info("No resume available for this candidate.")
+                current_candidate = candidate_name
+                current_number = number
+                current_description = [description] if description else []
+            elif description:  # Continuation of description for current candidate
+                current_description.append(description)
+            else:  # Non-candidate line (e.g., summary or explanation)
+                st.markdown(line)
 
-        if number != "":
+        # Handle the last candidate
+        if current_candidate:
             found_any = True
             with stylable_container(
-                key=f"container_with_border_{idx}",  # unique key
+                key=f"container_with_border_{len(candidates)}",  # unique key
                 css_styles="""
                     {
                         border: 0px solid #ccccd4;
@@ -274,38 +302,34 @@ if st.button("Evaluate Resumes") and vectorstore is not None and job_description
                     }
                 """,
             ):
-                st.markdown(f"##### {number}. {case_correct_name}")
-                st.markdown(description)
-
-                if lower_name in resume_name_map:
-                    file_name = resume_name_map[lower_name]
+                st.markdown(f"##### {current_number}. {current_candidate}")
+                st.markdown('\n'.join(current_description))
+                if current_candidate.lower() in resume_name_map:
+                    file_name = resume_name_map[current_candidate.lower()]
                     file_path = os.path.join(DOCS_DIR, file_name)
-
                     with st.expander("View Resume"):
                         if os.path.exists(file_path):
                             if file_name.lower().endswith(('.doc', '.docx')):
                                 with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_pdf:
                                     convert(file_path, tmp_pdf.name)
                                     pdf_path = tmp_pdf.name
-                            else:
-                                pdf_path = file_path
-                            with open(pdf_path, "rb") as f:
-                                base64_pdf = base64.b64encode(f.read()).decode('utf-8')
-                            st.markdown(f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="600" type="application/pdf"></iframe>', unsafe_allow_html=True)
-                            if file_name.lower().endswith(('.doc', '.docx')):
+                                with open(pdf_path, "rb") as f:
+                                    base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+                                st.markdown(f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="600" type="application/pdf"></iframe>', unsafe_allow_html=True)
                                 os.unlink(pdf_path)
+                            else:
+                                with open(file_path, "rb") as f:
+                                    base64_pdf = base64.b64encode(f.read()).decode('utf-8')
+                                st.markdown(f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="700" height="600" type="application/pdf"></iframe>', unsafe_allow_html=True)
                         else:
                             st.warning("File not found.")
                 else:
                     st.info("No resume available for this candidate.")
-        else:
-            # Still show the model's text (could be a reason/explanation)
-            st.markdown(candidate)
 
-    # If no top candidates found, give a reason
-    if not found_any:
-        st.info("No suitable applicants found based on the provided job description. "
-                "The resumes may not match the required skills or experience.")
+        # If no top candidates found, give a reason
+        if not found_any:
+            st.info("No suitable applicants found based on the provided job description. "
+                    "The resumes may not match the required skills or experience.")
 
 st.markdown("---")
 st.markdown("<div class='footer'>Powered by <a href='https://gemini.google.com/'>GOOGLE GEMINI</a> | © 2025 <a href='https://www.linkedin.com/in/guptarohandec/'>Rohan Gupta</a></div>", unsafe_allow_html=True)
