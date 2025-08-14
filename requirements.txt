@@ -2,6 +2,8 @@ streamlit
 langchain
 langchain_community
 langchain_google_genai
+langchain_huggingface
+sentence-transformers
 streamlit_pdf_viewer
 docx2pdf
 streamlit_extras
