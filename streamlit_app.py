@@ -53,7 +53,7 @@ def load_vector_db(vector_db_path: str):
 def get_llm():
     print("[INIT] Loading LLM (Gemini)...")
     return ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-2.5-flash-lite",
         temperature=1,
         google_api_key=API_KEY,
     )
